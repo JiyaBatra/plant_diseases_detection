@@ -107,7 +107,7 @@ def send_reset_email(to_email: str, name: str, link: str):
     api_key = st.secrets.get("RESEND_API_KEY")
     if not api_key:
         return False, "RESEND_API_KEY is missing in secrets."
-    sender = st.secrets.get("RESEND_FROM", "PlantCare AI <onboarding@resend.dev>")
+    sender = st.secrets.get("RESEND_FROM", "Acme <onboarding@resend.dev>")
     try:
         resp = requests.post(
             RESEND_URL,
