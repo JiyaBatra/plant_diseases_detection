@@ -1,3 +1,4 @@
+import os
 import certifi
 import streamlit as st
 from pymongo import MongoClient
