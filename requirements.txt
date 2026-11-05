@@ -1,0 +1,10 @@
+
+streamlit
+tensorflow==2.21.0
+numpy
+pandas
+Pillow
+pymongo
+bcrypt
+certifi
+requests
