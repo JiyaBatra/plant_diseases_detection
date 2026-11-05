@@ -248,24 +248,50 @@ def goto(page):
 # 3. DATABASE (MongoDB)
 # ==================================================
 @st.cache_resource(show_spinner="Connecting to database...")
+
 def get_db():
+    """Connect to MongoDB using Render environment variables or Streamlit secrets."""
+
+    mongo_uri = os.environ.get("MONGO_URI")
+
+    if not mongo_uri:
+        try:
+            mongo_uri = st.secrets.get("MONGO_URI")
+        except Exception:
+            mongo_uri = None
+
+    if not mongo_uri:
+        raise ValueError("MONGO_URI is missing. Add it in Render Environment Variables.")
+
+    db_name = os.environ.get("DB_NAME", "plant_disease_app")
+
+    if not os.environ.get("DB_NAME"):
+        try:
+            db_name = st.secrets.get("DB_NAME", "plant_disease_app")
+        except Exception:
+            pass
+
     client = MongoClient(
-        st.secrets["MONGO_URI"],
+        mongo_uri,
         serverSelectionTimeoutMS=8000,
         tlsCAFile=certifi.where(),
         tz_aware=True,
     )
+
     client.admin.command("ping")
-    db = client[st.secrets.get("DB_NAME", "plant_disease_app")]
+    db = client[db_name]
+
     db.users.create_index("email", unique=True)
     db.scans.create_index([("user_id", 1), ("created_at", -1)])
     db.plans.create_index([("user_id", 1), ("status", 1)])
     db.checkins.create_index([("plan_id", 1), ("created_at", 1)])
-    # password reset tokens (only a SHA-256 hash of each token is stored)
+
     db.password_resets.create_index("token_hash", unique=True)
     db.password_resets.create_index([("user_id", 1), ("created_at", -1)])
-    db.password_resets.create_index("expires_at", expireAfterSeconds=0)  # auto-delete when expired
+    db.password_resets.create_index("expires_at", expireAfterSeconds=0)
+
     return db
+
 
 
 def now():
