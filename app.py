@@ -53,6 +53,7 @@ def make_favicon():
     d.line([(88, 190), (168, 90)], fill=(155, 224, 188, 255), width=12)
     return img
 
+
 # ==================================================
 # 1. PAGE CONFIG
 # ==================================================
@@ -245,53 +246,8 @@ def goto(page):
 
 
 # ==================================================
-# 3. DATABASE (MongoDB)
+# 3. CONFIG HELPER + DATABASE (MongoDB)
 # ==================================================
-@st.cache_resource(show_spinner="Connecting to database...")
-
-def get_db():
-    """Connect to MongoDB using Render environment variables or Streamlit secrets."""
-
-    mongo_uri = os.environ.get("MONGO_URI")
-
-    if not mongo_uri:
-        try:
-            mongo_uri = st.secrets.get("MONGO_URI")
-        except Exception:
-            mongo_uri = None
-
-    if not mongo_uri:
-        raise ValueError("MONGO_URI is missing. Add it in Render Environment Variables.")
-
-    db_name = os.environ.get("DB_NAME", "plant_disease_app")
-
-    if not os.environ.get("DB_NAME"):
-        try:
-            db_name = st.secrets.get("DB_NAME", "plant_disease_app")
-        except Exception:
-            pass
-
-    client = MongoClient(
-        mongo_uri,
-        serverSelectionTimeoutMS=8000,
-        tlsCAFile=certifi.where(),
-        tz_aware=True,
-    )
-
-    client.admin.command("ping")
-    db = client[db_name]
-
-    db.users.create_index("email", unique=True)
-    db.scans.create_index([("user_id", 1), ("created_at", -1)])
-    db.plans.create_index([("user_id", 1), ("status", 1)])
-    db.checkins.create_index([("plan_id", 1), ("created_at", 1)])
-
-    db.password_resets.create_index("token_hash", unique=True)
-    db.password_resets.create_index([("user_id", 1), ("created_at", -1)])
-    db.password_resets.create_index("expires_at", expireAfterSeconds=0)
-
-    return db
-
 def get_secret(key, default=None):
     """Render env var first, then Streamlit secrets, then default. Never crashes."""
     value = os.environ.get(key)
@@ -301,6 +257,38 @@ def get_secret(key, default=None):
         return st.secrets[key]
     except Exception:
         return default
+
+
+@st.cache_resource(show_spinner="Connecting to database...")
+def get_db():
+    """Connect to MongoDB using Render environment variables or Streamlit secrets."""
+    mongo_uri = get_secret("MONGO_URI")
+    if not mongo_uri:
+        raise ValueError("MONGO_URI is missing. Add it in Render Environment Variables.")
+
+    db_name = get_secret("DB_NAME", "plant_disease_app")
+
+    client = MongoClient(
+        mongo_uri,
+        serverSelectionTimeoutMS=8000,
+        tlsCAFile=certifi.where(),
+        tz_aware=True,
+    )
+    client.admin.command("ping")
+    db = client[db_name]
+
+    db.users.create_index("email", unique=True)
+    db.scans.create_index([("user_id", 1), ("created_at", -1)])
+    db.plans.create_index([("user_id", 1), ("status", 1)])
+    db.checkins.create_index([("plan_id", 1), ("created_at", 1)])
+
+    # password reset tokens (only a SHA-256 hash of each token is stored)
+    db.password_resets.create_index("token_hash", unique=True)
+    db.password_resets.create_index([("user_id", 1), ("created_at", -1)])
+    db.password_resets.create_index("expires_at", expireAfterSeconds=0)  # auto-delete when expired
+
+    return db
+
 
 def now():
     return datetime.now(timezone.utc)
@@ -397,10 +385,10 @@ def _reset_email_html(name, link):
 
 
 def send_reset_email(to_email, name, link):
-   api_key = get_secret("RESEND_API_KEY")
+    api_key = get_secret("RESEND_API_KEY")
     if not api_key:
-        return False, "RESEND_API_KEY is missing in secrets."
-   sender = get_secret("RESEND_FROM", "PlantCare AI <onboarding@resend.dev>")
+        return False, "RESEND_API_KEY is missing. Add it in Render Environment Variables."
+    sender = get_secret("RESEND_FROM", "PlantCare AI <onboarding@resend.dev>")
     try:
         resp = requests.post(
             RESEND_URL,
@@ -423,31 +411,38 @@ def send_reset_email(to_email, name, link):
 
 def request_password_reset(email):
     """Always returns the same public message so nobody can discover which emails are registered.
-    Real errors are printed to the server console."""
+    Real errors are printed to the server console (Render Logs).
+    For testing only: set env var DEBUG_RESET=1 on Render to also see the error on screen."""
     email = email.strip().lower()
     if not EMAIL_RE.match(email):
         return False, "Please enter a valid email address."
-    db = get_db()
-    user = db.users.find_one({"email": email})
-    if not user:
-        return True, GENERIC_RESET_MSG
-    recent = db.password_resets.find_one({
-        "user_id": str(user["_id"]),
-        "created_at": {"$gt": now() - timedelta(seconds=RESET_COOLDOWN_SECONDS)},
-    })
-    if recent:
-        return True, GENERIC_RESET_MSG
+    try:
+        db = get_db()
+        user = db.users.find_one({"email": email})
+        if not user:
+            return True, GENERIC_RESET_MSG
+        recent = db.password_resets.find_one({
+            "user_id": str(user["_id"]),
+            "created_at": {"$gt": now() - timedelta(seconds=RESET_COOLDOWN_SECONDS)},
+        })
+        if recent:
+            return True, GENERIC_RESET_MSG
 
-    token = secrets.token_urlsafe(32)
-    db.password_resets.insert_one({
-        "user_id": str(user["_id"]), "token_hash": _hash_token(token),
-        "created_at": now(), "expires_at": now() + timedelta(minutes=RESET_TTL_MINUTES),
-    })
-    app_url = str(get_secret("APP_URL", "https://plant-diseases-detection-h1s8.onrender.com")).rstrip("/")
-    ok, detail = send_reset_email(email, user["name"], f"{app_url}/?reset_token={token}")
-    if not ok:
-        print(f"[password reset] email failed for {email}: {detail}")
-        db.password_resets.delete_one({"token_hash": _hash_token(token)})
+        token = secrets.token_urlsafe(32)
+        db.password_resets.insert_one({
+            "user_id": str(user["_id"]), "token_hash": _hash_token(token),
+            "created_at": now(), "expires_at": now() + timedelta(minutes=RESET_TTL_MINUTES),
+        })
+        app_url = str(get_secret("APP_URL", "https://plant-diseases-detection-h1s8.onrender.com")).rstrip("/")
+        ok, detail = send_reset_email(email, user["name"], f"{app_url}/?reset_token={token}")
+        if not ok:
+            print(f"[password reset] email failed for {email}: {detail}", flush=True)
+            st.session_state["reset_debug"] = detail
+            db.password_resets.delete_one({"token_hash": _hash_token(token)})
+    except Exception as err:
+        import traceback
+        print("[password reset] unexpected error:\n" + traceback.format_exc(), flush=True)
+        st.session_state["reset_debug"] = f"{type(err).__name__}: {err}"
     return True, GENERIC_RESET_MSG
 
 
@@ -545,6 +540,10 @@ def render_auth():
                     with st.spinner("Sending..."):
                         ok, msg = request_password_reset(email)
                     (st.success if ok else st.error)(msg)
+            # Testing only: shows the real reason when DEBUG_RESET=1 is set on Render
+            debug_msg = st.session_state.pop("reset_debug", None)
+            if debug_msg and get_secret("DEBUG_RESET") == "1":
+                st.warning(f"DEBUG: {debug_msg}")
 
 
 # ==================================================
@@ -1377,8 +1376,8 @@ inject_css()
 
 try:
     get_db()
-except KeyError:
-    st.error("MONGO_URI is missing. Add it to .streamlit/secrets.toml.")
+except ValueError as err:
+    st.error(str(err))
     st.stop()
 except Exception as err:
     st.error(f"Could not connect to MongoDB: {err}")
