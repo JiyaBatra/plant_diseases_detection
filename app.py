@@ -435,7 +435,7 @@ def request_password_reset(email):
         "user_id": str(user["_id"]), "token_hash": _hash_token(token),
         "created_at": now(), "expires_at": now() + timedelta(minutes=RESET_TTL_MINUTES),
     })
-    app_url = str(st.secrets.get("APP_URL", "http://localhost:8501")).rstrip("/")
+    app_url = str(st.secrets.get("APP_URL", "https://plant-diseases-detection-h1s8.onrender.com/")).rstrip("/")
     ok, detail = send_reset_email(email, user["name"], f"{app_url}/?reset_token={token}")
     if not ok:
         print(f"[password reset] email failed for {email}: {detail}")
