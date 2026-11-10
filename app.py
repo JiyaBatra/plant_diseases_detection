@@ -292,7 +292,15 @@ def get_db():
 
     return db
 
-
+def get_secret(key, default=None):
+    """Render env var first, then Streamlit secrets, then default. Never crashes."""
+    value = os.environ.get(key)
+    if value:
+        return value
+    try:
+        return st.secrets[key]
+    except Exception:
+        return default
 
 def now():
     return datetime.now(timezone.utc)
@@ -389,10 +397,10 @@ def _reset_email_html(name, link):
 
 
 def send_reset_email(to_email, name, link):
-    api_key = st.secrets.get("RESEND_API_KEY")
+   api_key = get_secret("RESEND_API_KEY")
     if not api_key:
         return False, "RESEND_API_KEY is missing in secrets."
-    sender = st.secrets.get("RESEND_FROM", "PlantCare AI <onboarding@resend.dev>")
+   sender = get_secret("RESEND_FROM", "PlantCare AI <onboarding@resend.dev>")
     try:
         resp = requests.post(
             RESEND_URL,
@@ -435,7 +443,7 @@ def request_password_reset(email):
         "user_id": str(user["_id"]), "token_hash": _hash_token(token),
         "created_at": now(), "expires_at": now() + timedelta(minutes=RESET_TTL_MINUTES),
     })
-    app_url = str(st.secrets.get("APP_URL", "https://plant-diseases-detection-h1s8.onrender.com/")).rstrip("/")
+    app_url = str(get_secret("APP_URL", "https://plant-diseases-detection-h1s8.onrender.com")).rstrip("/")
     ok, detail = send_reset_email(email, user["name"], f"{app_url}/?reset_token={token}")
     if not ok:
         print(f"[password reset] email failed for {email}: {detail}")
